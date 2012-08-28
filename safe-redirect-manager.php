@@ -4,7 +4,7 @@ Plugin Name: Safe Redirect Manager
 Plugin URI: http://www.10up.com
 Description: Easily and safely manage HTTP redirects.
 Author: Taylor Lovett (10up LLC), VentureBeat
-Version: 1.0
+Version: 1.1
 Author URI: http://www.10up.com
 
 GNU General Public License, Free Software Foundation <http://creativecommons.org/licenses/GPL/2.0/>
@@ -75,12 +75,11 @@ class SRM_Safe_Redirect_Manager {
 	 * @return void
 	 */
 	public function action_print_logo_css() {
-		global $post;
-		if ( is_object( $post ) && $this->redirect_post_type == $post->post_type ) {
+		if ( $this->is_plugin_page() ) {
 		?>
 			<style type="text/css">
 				#icon-tools {
-					background: url("<?php echo plugins_url(); ?>/safe-redirect-manager/images/icon32x32.png") no-repeat top left !important;
+					background: url("<?php echo plugins_url( 'images/icon32x32.png', __FILE__ ); ?>") no-repeat top left !important;
 					margin-right: 0;
 				}
 				#visibility {
@@ -101,6 +100,17 @@ class SRM_Safe_Redirect_Manager {
 	}
 	
 	/**
+	 * Whether or not this is an admin page specific to the plugin
+	 *
+	 * @since 1.1
+	 * @uses get_post_type
+	 * @return bool
+ 	 */
+	private function is_plugin_page() {
+		return (bool) ( get_post_type() == $this->redirect_post_type || ( isset( $_GET['post_type'] ) && $this->redirect_post_type == $_GET['post_type'] ) );	
+	}  
+	
+	/**
 	 * Echoes admin message if redirect chains exist
 	 *
 	 * @since 1.0
@@ -108,8 +118,8 @@ class SRM_Safe_Redirect_Manager {
 	 * @return void
 	 */
 	public function action_redirect_chain_alert() {
-		global $post, $hook_suffix;
-		if ( is_object( $post ) && $this->redirect_post_type == $post->post_type ) {
+		global $hook_suffix;
+		if ( $this->is_plugin_page() ) {
 			if ( $this->check_for_possible_redirect_loops() ) {
 			?>
 				<div class="updated">
