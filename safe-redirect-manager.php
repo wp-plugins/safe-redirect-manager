@@ -4,7 +4,7 @@ Plugin Name: Safe Redirect Manager
 Plugin URI: http://www.10up.com
 Description: Easily and safely manage HTTP redirects.
 Author: Taylor Lovett (10up LLC), VentureBeat
-Version: 1.1
+Version: 1.2
 Author URI: http://www.10up.com
 
 GNU General Public License, Free Software Foundation <http://creativecommons.org/licenses/GPL/2.0/>
@@ -66,11 +66,102 @@ class SRM_Safe_Redirect_Manager {
 		add_action( 'admin_print_styles-edit.php', array( $this, 'action_print_logo_css' ), 10, 1 );
 		add_action( 'admin_print_styles-post.php', array( $this, 'action_print_logo_css' ), 10, 1 );
 		add_action( 'admin_print_styles-post-new.php', array( $this, 'action_print_logo_css' ), 10, 1 );
+		
+		// Search filters
+		add_filter( 'posts_join', array( $this, 'filter_search_join' ) );
+		add_filter( 'posts_where', array( $this, 'filter_search_where' ) );
+		add_filter( 'posts_distinct', array( $this, 'filter_search_distinct' ) );
+	}
+	
+	/**
+	 * Join posts table with postmeta table on search
+	 *
+	 * @since 1.2
+	 * @param string $join
+	 * @uses get_query_var
+	 * @return string
+	 */
+	public function filter_search_join( $join ) {
+		if ( $this->redirect_post_type != get_query_var( 'post_type' ) )
+			return $join;
+		
+		global $wpdb;
+		
+		$s = get_query_var( 's' );
+		if ( ! empty( $s ) ) {
+			$join .= " LEFT JOIN $wpdb->postmeta AS m ON ($wpdb->posts.ID = m.post_id) ";
+		}
+		return $join;
+	}
+	
+	/**
+	 * Return distinct search results
+	 *
+	 * @param string $distinct
+	 * return string
+	 */
+	public function filter_search_distinct( $distinct ) {
+		if ( $this->redirect_post_type != get_query_var( 'post_type' ) )
+			return $distinct;
+		
+		return 'DISTINCT';
+	}
+	
+	/**
+	 * Join posts table with postmeta table on search
+	 *
+	 * @since 1.2
+	 * @param string $where
+	 * @uses is_search, get_query_var
+	 * @return string
+	 */
+	public function filter_search_where( $where ) {
+		if ( $this->redirect_post_type != get_query_var( 'post_type' ) || ! is_search() || empty( $where ) )
+			return $where;
+		
+		$exact = get_query_var( 'exact' );
+		$n = ( ! empty( $exact ) ) ? '' : '%';
+
+		$search = '';
+		$seperator = '';
+		$terms = $this->get_search_terms();
+		$search .= '(';
+		
+		// we check the meta values against each term in the search
+		foreach ( $terms as $term ) {
+			$search .= $seperator;	
+			$search .= sprintf( "( ( m.meta_value LIKE '%s%s%s' AND m.meta_key = '%s') OR ( m.meta_value LIKE '%s%s%s' AND m.meta_key = '%s') )", $n, $term, $n, $this->meta_key_redirect_from, $n, $term, $n, $this->meta_key_redirect_to );		
+			$seperator = ' OR ';
+		}
+		
+		$search .= ')';
+		
+		$where = preg_replace( '/\(\(\(.*?\)\)\)/is', '((' . $search . '))', $where );
+		
+		return $where;
+	}
+	
+	/**
+	 * Get an array of search terms
+	 *
+	 * @since 1.2
+	 * @uses get_query_var
+	 * @return array
+	 */
+	private function get_search_terms() {
+		$s = get_query_var( 's' );
+
+		if ( ! empty( $s ) ) {
+			preg_match_all( '/".*?("|$)|((?<=[\\s",+])|^)[^\\s",+]+/', stripslashes( $s ), $matches );
+			$search_terms = array_map( create_function( '$a', 'return trim( $a, "\\"\'\\n\\r " );' ), $matches[0] );
+		}
+		return $search_terms;
 	}
 	
 	/**
 	 * Swap tools logo for plugin logo
 	 *
+	 * @since 1.1
 	 * @uses plugins_url
 	 * @return void
 	 */
@@ -82,7 +173,7 @@ class SRM_Safe_Redirect_Manager {
 					background: url("<?php echo plugins_url( 'images/icon32x32.png', __FILE__ ); ?>") no-repeat top left !important;
 					margin-right: 0;
 				}
-				#visibility {
+				#visibility, .view-switch, .posts .inline-edit-col-left .inline-edit-group {
 					display: none;
 				}
 			</style>
@@ -93,6 +184,7 @@ class SRM_Safe_Redirect_Manager {
 	/**
 	 * Removes bulk actions from post manager
 	 *
+	 * @since 1.0
 	 * @return array
 	 */
 	public function filter_bulk_actions() {
@@ -199,7 +291,7 @@ class SRM_Safe_Redirect_Manager {
 	 * @since 1.0
 	 * @param string $title
 	 * @param int $post_id
-	 * @uses is_admin
+	 * @uses is_admin, get_post_meta
 	 * @return string
 	 */
 	public function filter_admin_title( $title, $post_id ) {
@@ -297,8 +389,11 @@ class SRM_Safe_Redirect_Manager {
 		$columns['title'] = __( 'Redirect From', 'safe-redirect-manager' );
 		
 		// Move date column to the back
-		unset($columns['date']);
+		unset( $columns['date'] );
 		$columns['date'] = __( 'Date', 'safe-redirect-manager' );
+		
+		// get rid of checkboxes
+		unset( $columns['cb'] );
 		
 		return $columns;
 	}
@@ -342,7 +437,7 @@ class SRM_Safe_Redirect_Manager {
 	 * Registers post types for plugin
 	 *
 	 * @since 1.0
-	 * @uses register_post_type, _x, plugins_url
+	 * @uses register_post_type, _x, plugins_url, apply_filters
 	 * @return void
 	 */
 	public function action_register_post_types() {
@@ -361,6 +456,18 @@ class SRM_Safe_Redirect_Manager {
 			'parent_item_colon' => '',
 			'menu_name' => __( 'Safe Redirect Manager', 'safe-redirect-manager' )
 		);
+		$redirect_capability = 'manage_options';
+		$redirect_capability = apply_filters( 'srm_restrict_to_capability', $redirect_capability );
+		$capabilities = array(
+			'edit_post' => $redirect_capability,
+			'read_post' => $redirect_capability,
+			'delete_post' => $redirect_capability,
+			'edit_posts' => $redirect_capability,
+			'edit_others_posts' => $redirect_capability,
+			'publish_posts' => $redirect_capability,
+			'read_private_posts' => $redirect_capability
+		);
+		
 		$redirect_args = array(
 		  'labels' => $redirect_labels,
 		  'public' => false,
@@ -370,6 +477,7 @@ class SRM_Safe_Redirect_Manager {
 		  'query_var' => false,
 		  'rewrite' => false,
 		  'capability_type' => 'post',
+		  'capabilities' => $capabilities,
 		  'has_archive' => false, 
 		  'hierarchical' => false,
 		  'register_meta_box_cb' => array( $this, 'action_redirect_rule_metabox' ),
