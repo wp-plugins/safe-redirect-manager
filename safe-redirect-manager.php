@@ -4,7 +4,7 @@ Plugin Name: Safe Redirect Manager
 Plugin URI: http://www.10up.com
 Description: Easily and safely manage HTTP redirects.
 Author: Taylor Lovett (10up LLC), VentureBeat
-Version: 1.4
+Version: 1.4.1
 Author URI: http://www.10up.com
 
 GNU General Public License, Free Software Foundation <http://creativecommons.org/licenses/GPL/2.0/>
@@ -228,6 +228,9 @@ class SRM_Safe_Redirect_Manager {
 		update_post_meta( $post_id, $this->meta_key_redirect_from, $sanitized_redirect_from );
 		update_post_meta( $post_id, $this->meta_key_redirect_to, $sanitized_redirect_to );
 		update_post_meta( $post_id, $this->meta_key_redirect_status_code, $sanitized_status_code );
+		
+		// We need to update the cache after creating this redirect
+		$this->update_redirect_cache();
 		
 		return $post_id;
 	}
@@ -476,6 +479,13 @@ class SRM_Safe_Redirect_Manager {
 			} else {
 				delete_post_meta( $post_id, $this->meta_key_redirect_status_code );
 			}
+			
+			/**
+			 * This fixes an important bug where the redirect cache was not up-to-date. Previously the cache was only being
+			 * updated on transition_post_status which gets called BEFORE save post. But since save_post is where all the important
+			 * redirect info is saved, updating the cache before it is not sufficient.
+			 */
+			$this->update_redirect_cache();
 		}
 	}
 	
@@ -668,12 +678,25 @@ class SRM_Safe_Redirect_Manager {
 	 */
 	public function action_parse_request() {
 		
-		// get requested path and add a / before it
-		$requested_path = sanitize_text_field( $_SERVER['REQUEST_URI'] );
-		
 		// get redirects from cache or recreate it
 		if ( false === ( $redirects = get_transient( $this->cache_key_redirects ) ) ) {
 			$redirects = $this->update_redirect_cache();
+		}
+		
+		// If we have no redirects, there is no need to continue
+		if ( empty( $redirects ) )
+			return;
+		
+		// get requested path and add a / before it
+		$requested_path = sanitize_text_field( $_SERVER['REQUEST_URI'] );
+		
+		/**
+		 * If WordPress resides in a directory that is not the public root, we have to chop
+		 * the pre-WP path off the requested path.
+		 */
+		$parsed_site_url = parse_url( site_url() );
+		if ( '/' != $parsed_site_url['path'] ) {
+			$requested_path = preg_replace( '@' . $parsed_site_url['path'] . '@i', '', $requested_path, 1 );
 		}
 		
 		foreach ( $redirects as $redirect ) {
