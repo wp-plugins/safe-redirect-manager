@@ -4,7 +4,7 @@ Plugin Name: Safe Redirect Manager
 Plugin URI: http://www.10up.com
 Description: Easily and safely manage HTTP redirects.
 Author: Taylor Lovett (10up LLC), VentureBeat
-Version: 1.6
+Version: 1.7
 Author URI: http://www.10up.com
 
 GNU General Public License, Free Software Foundation <http://creativecommons.org/licenses/GPL/2.0/>
@@ -58,7 +58,6 @@ class SRM_Safe_Redirect_Manager {
 		add_action( 'init', array( $this, 'action_init' ) );
 		add_action( 'init', array( $this, 'action_register_post_types' ) );
 		add_action( 'parse_request', array( $this, 'action_parse_request' ), 0 );
-		add_action( 'after_theme_setup', array( $this, 'action_load_texthost' ) );
 		add_action( 'save_post', array( $this, 'action_save_post' ) );
 		add_filter( 'manage_' . $this->redirect_post_type . '_posts_columns' , array( $this, 'filter_redirect_columns' ) );
 		add_action( 'manage_' . $this->redirect_post_type . '_posts_custom_column' , array( $this, 'action_custom_redirect_columns' ), 10, 2 );
@@ -70,11 +69,24 @@ class SRM_Safe_Redirect_Manager {
 		add_action( 'admin_print_styles-edit.php', array( $this, 'action_print_logo_css' ), 10, 1 );
 		add_action( 'admin_print_styles-post.php', array( $this, 'action_print_logo_css' ), 10, 1 );
 		add_action( 'admin_print_styles-post-new.php', array( $this, 'action_print_logo_css' ), 10, 1 );
+		add_filter( 'post_type_link', array( $this, 'filter_post_type_link' ), 10, 2  );
+		add_action( 'plugins_loaded', array( $this, 'action_plugins_loaded' ) );
 
 		// Search filters
 		add_filter( 'posts_join', array( $this, 'filter_search_join' ) );
 		add_filter( 'posts_where', array( $this, 'filter_search_where' ) );
 		add_filter( 'posts_distinct', array( $this, 'filter_search_distinct' ) );
+	}
+
+	/**
+	* Localize plugin
+	*
+	* @since 1.7
+	* @uses load_plugin_textdomain
+	* @return void
+	*/
+	public function action_plugins_loaded() {
+		load_plugin_textdomain( 'safe-redirect-manager', false, basename( dirname( __FILE__ ) ) . '/languages' );
 	}
 
 	/**
@@ -317,9 +329,7 @@ class SRM_Safe_Redirect_Manager {
 			$redirects = $this->update_redirect_cache();
 		}
 
-		$max_redirects = apply_filters( 'srm_max_redirects', $this->default_max_redirects );
-
-		return ( count( $redirects ) >= $max_redirects );
+		return ( count( $redirects ) >= $this->default_max_redirects );
 	}
 
 	/**
@@ -376,9 +386,16 @@ class SRM_Safe_Redirect_Manager {
 	 * @return string
 	 */
 	public function filter_admin_title( $title, $post_id = 0 ) {
-		if ( ! is_admin() || false === ( $redirect = get_post( $post_id ) ) || $redirect->post_type != $this->redirect_post_type )
+		if ( ! is_admin() )
 			return $title;
 
+		$redirect = get_post( $post_id );
+		if ( empty( $redirect ) )
+			return $title;
+		
+		if ( $redirect->post_type != $this->redirect_post_type )
+			return $title;
+		
 		$redirect_from = get_post_meta( $post_id, $this->meta_key_redirect_from, true );
 		if ( ! empty( $redirect_from ) )
 			return $redirect_from;
@@ -644,6 +661,8 @@ class SRM_Safe_Redirect_Manager {
 	 */
 	public function action_init() {
 		load_plugin_textdomain( 'safe-redirect-manager', false, dirname( plugin_basename( __FILE__ ) ) . '/languages/' );
+
+		$this->default_max_redirects = apply_filters( 'srm_max_redirects', $this->default_max_redirects );
 	}
 
 	/**
@@ -675,34 +694,52 @@ class SRM_Safe_Redirect_Manager {
 	 */
 	public function get_redirects( $args = array() ) {
 
-		$defaults = array(
-				'posts_per_page'     => 1000,
-				'post_status'        => 'publish',
-			);
-
-		$query_args = array_merge( $defaults, $args );
-
-		// Some arguments that don't need to be configurable
-		$query_args['post_type'] = $this->redirect_post_type;
-		$query_args['no_found_rows'] = false;
-		$query_args['update_term_cache'] = false;
-
-		$redirect_query = new WP_Query( $query_args );
-
-		if ( empty( $redirect_query->posts ) )
-			return array();
-
 		$redirects = array();
-		foreach( $redirect_query->posts as $redirect ) {
-			$redirects[] = array(
-					'ID'                    => $redirect->ID,
-					'post_status'           => $redirect->post_status,
-					'redirect_from'         => get_post_meta( $redirect->ID, $this->meta_key_redirect_from, true ),
-					'redirect_to'           => get_post_meta( $redirect->ID, $this->meta_key_redirect_to, true ),
-					'status_code'           => (int)get_post_meta( $redirect->ID, $this->meta_key_redirect_status_code, true ),
-					'enable_regex'          => (bool)get_post_meta( $redirect->ID, $this->meta_key_enable_redirect_from_regex, true ),
+
+		if ( $this->default_max_redirects > 50 )
+			$posts_per_page = 50;
+		else
+			$posts_per_page = $this->default_max_redirects;
+
+		$i = 1;
+		do {
+
+			$defaults = array(
+					'posts_per_page'     => $posts_per_page,
+					'post_status'        => 'publish',
+					'paged'              => $i,
 				);
-		}
+
+			$query_args = array_merge( $defaults, $args );
+
+			// Some arguments that don't need to be configurable
+			$query_args['post_type'] = $this->redirect_post_type;
+			$query_args['no_found_rows'] = false;
+			$query_args['update_term_cache'] = false;
+
+			$redirect_query = new WP_Query( $query_args );
+
+			foreach( $redirect_query->posts as $redirect ) {
+				$redirects[] = array(
+						'ID'                    => $redirect->ID,
+						'post_status'           => $redirect->post_status,
+						'redirect_from'         => get_post_meta( $redirect->ID, $this->meta_key_redirect_from, true ),
+						'redirect_to'           => get_post_meta( $redirect->ID, $this->meta_key_redirect_to, true ),
+						'status_code'           => (int)get_post_meta( $redirect->ID, $this->meta_key_redirect_status_code, true ),
+						'enable_regex'          => (bool)get_post_meta( $redirect->ID, $this->meta_key_enable_redirect_from_regex, true ),
+					);
+			}
+
+			if ( count( $redirects ) == $this->default_max_redirects 
+				|| count( $redirect_query->posts ) < $posts_per_page )
+				$build = false;
+			else
+				$build = true;
+
+			$i++;
+
+		} while ( $build );
+
 		return $redirects;
 	}
 
@@ -741,7 +778,7 @@ class SRM_Safe_Redirect_Manager {
 			return;
 
 		// get requested path and add a / before it
-		$requested_path = sanitize_text_field( $_SERVER['REQUEST_URI'] );
+		$requested_path = esc_url_raw( $_SERVER['REQUEST_URI'] );
 		$requested_path = stripslashes( $requested_path );
 
 		/**
@@ -798,6 +835,11 @@ class SRM_Safe_Redirect_Manager {
 				}
 
 				header("X-Safe-Redirect-Manager: true");
+
+				// Allow for regex replacement in $redirect_to
+				if ( $enable_regex ) {
+					$redirect_to = preg_replace( '@' . $redirect_from . '@', $redirect_to, $requested_path );
+				}
 
 				// if we have a valid status code, then redirect with it
 				if ( in_array( $status_code, $this->valid_status_codes ) )
@@ -863,6 +905,33 @@ class SRM_Safe_Redirect_Manager {
 		$path = str_replace( '@', '', $path );
 
 		return $path;
+	}
+	
+	/**
+	 * Return a permalink for a redirect post, which is the "redirect from"
+	 * URL for that redirect.
+	 * 
+	 * @since 1.7
+	 * @param string $permalink The permalink
+	 * @param object $post A Post object
+	 * @uses home_url, get_post_meta
+	 * @return string The permalink
+	 */
+	public function filter_post_type_link( $permalink, $post ) {
+		if ( $this->redirect_post_type != $post->post_type )
+			return $permalink;
+
+		// We can't do anything to provide a permalink 
+		// for regex enabled redirects.
+		if ( get_post_meta( $post->ID, $this->meta_key_enable_redirect_from_regex, true ) )
+			return $permalink;
+
+		// We can't do anything if there is a wildcard in the redirect from
+		$redirect_from = get_post_meta( $post->ID, $this->meta_key_redirect_from, true );
+		if ( false !== strpos( $redirect_from, '*' ) )
+			return $permalink;
+
+		return home_url( $redirect_from );
 	}
 }
 
